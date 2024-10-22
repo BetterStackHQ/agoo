@@ -349,7 +349,7 @@ named_listen(agooErr err, agooBind b) {
 
         return agoo_err_set(err, errno, "Server failed to bind server socket. %s.", strerror(errno));
     }
-    if (0 != (e = listen(b->fd, 10000))) {
+    if (0 != (e = listen(b->fd, 1000))) {
         return agoo_err_set(err, e, "Server failed to bind to port %d. %s.", b->fd, strerror(e));
     }
     return AGOO_ERR_OK;
