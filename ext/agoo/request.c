@@ -415,12 +415,6 @@ rack_run_once(VALUE self) {
 static void
 add_header_value(VALUE hh, const char *key, int klen, const char *val, int vlen) {
     VALUE	v;
-    if (klen < 0) {
-        klen = 0;
-    }
-    if (vlen < 0) {
-        vlen = 0;
-    }
 
     if (sizeof(content_type) - 1 == klen && 0 == strncasecmp(key, content_type, sizeof(content_type) - 1)) {
 	if (Qnil == (v = rb_hash_lookup2(hh, content_type_val, Qnil))) {
@@ -500,34 +494,17 @@ fill_headers(agooReq r, VALUE hash) {
 	    break;
 	case '\r':
 	    if (NULL != val) {
-            // Make sure we don't walk off the line:
-            while (val < h && ' ' == *val) {
-                val++;
-            }
-            vend = h;
+		for (; ' ' == *val; val++) {
+		}
+		vend = h;
 	    }
-
-        // Guard #1: If there was no colon, skip this line entirely.
-        // That means no key/value to add.
-        if (NULL == val) {
-            if (h + 1 < end && '\n' == *(h + 1)) {
-                h++;
-            }
-            key = h + 1;
-            kend = NULL;
-            val = NULL;
-            vend = NULL;
-            break;
-        }
-
 	    if (NULL != key) {
-            while (key < kend && ' ' == *key) {
-                key++;
-            }
+		for (; ' ' == *key; key++) {
+		}
 	    }
-	    if ((h + 1) < end && '\n' == *(h + 1)) {
-            h++;
-        }
+	    if ('\n' == *(h + 1)) {
+		h++;
+	    }
 	    klen = (int)(kend - key);
 	    add_header_value(hash, key, klen, val, (int)(vend - val));
 	    if (sizeof(upgrade_key) - 1 == klen && 0 == strncasecmp(key, upgrade_key, sizeof(upgrade_key) - 1)) {
