@@ -5,6 +5,8 @@ extension_name = 'agoo'
 dir_config(extension_name)
 dir_config('openssl')
 
+$CFLAGS += ' -g'  # Basic debug symbols
+
 if 'x86_64-linux' == RUBY_PLATFORM
   $CFLAGS += " -DPLATFORM_LINUX -std=gnu11"
 else
@@ -12,6 +14,7 @@ else
 end
 
 $CFLAGS += ' -D_POSIX_SOURCE -D_GNU_SOURCE'
+$CFLAGS += ' -O0'
 
 # Adding the __attribute__ flag only works with gcc compilers and even then it
 # does not work to check args with varargs so just remove the check.
