@@ -411,177 +411,134 @@ static VALUE
 rack_run_once(VALUE self) {
     return Qfalse;
 }
+
 static void
 add_header_value(VALUE hh, const char *key, int klen, const char *val, int vlen) {
-    if (NULL == key || NULL == val || klen <= 0 || vlen <= 0) {
-        return;
-    }
+    VALUE	v;
 
-    // Handle Content-Type header
-    if (sizeof(content_type) - 1 == klen && 
-        0 == strncasecmp(key, content_type, sizeof(content_type) - 1)) {
-        VALUE v = rb_hash_lookup2(hh, content_type_val, Qnil);
-        
-        if (Qnil == v) {
-            rb_hash_aset(hh, content_type_val, rb_str_new(val, vlen));
-        } else {
-            volatile VALUE a = rb_ary_new();
-            rb_ary_push(a, v);
-            rb_ary_push(a, rb_str_new(val, vlen));
-            rb_hash_aset(hh, content_type_val, a);
-        }
-        return;
-    }
+    if (sizeof(content_type) - 1 == klen && 0 == strncasecmp(key, content_type, sizeof(content_type) - 1)) {
+	if (Qnil == (v = rb_hash_lookup2(hh, content_type_val, Qnil))) {
+	    rb_hash_aset(hh, content_type_val, rb_str_new(val, vlen));
+	} else {
+	    volatile VALUE	a = rb_ary_new();
 
-    // Handle Content-Length header
-    if (sizeof(content_length) - 1 == klen && 
-        0 == strncasecmp(key, content_length, sizeof(content_length) - 1)) {
-        VALUE v = rb_hash_lookup2(hh, content_length_val, Qnil);
-        
-        if (Qnil == v) {
-            rb_hash_aset(hh, content_length_val, rb_str_new(val, vlen));
-        } else {
-            rb_raise(rb_eArgError, "Multiple Content-Length headers.");
-        }
-        return;
-    }
-
-    // Handle other headers
-    char hkey[1024];
-    if (klen + 6 >= (int)sizeof(hkey)) {  // 5 for "HTTP_" + 1 for null terminator
-        return;  // Key too long
-    }
-
-    // Build header key with "HTTP_" prefix
-    strcpy(hkey, "HTTP_");
-    char *k = hkey + 5;
-    memcpy(k, key, klen);
-    hkey[klen + 5] = '\0';
-
-    // Convert to uppercase and replace '-' with '_'
-    for (k = hkey + 5; *k; k++) {
-        if ('-' == *k) {
-            *k = '_';
-        } else {
-            *k = toupper(*k);
-        }
-    }
-
-    // Set the header value
-    volatile VALUE kval = rb_str_new(hkey, klen + 5);
-    volatile VALUE sval = rb_str_new(val, vlen);
-    VALUE v = rb_hash_lookup2(hh, kval, Qnil);
-
-    if (Qnil == v) {
-        rb_hash_aset(hh, kval, sval);
+	    rb_ary_push(a, v);
+	    rb_ary_push(a, rb_str_new(val, vlen));
+	    rb_hash_aset(hh, content_type_val, a);
+	}
+    } else if (sizeof(content_length) - 1 == klen && 0 == strncasecmp(key, content_length, sizeof(content_length) - 1)) {
+	if (Qnil == (v = rb_hash_lookup2(hh, content_length_val, Qnil))) {
+	    rb_hash_aset(hh, content_length_val, rb_str_new(val, vlen));
+	} else {
+	    rb_raise(rb_eArgError, "Multiple Content-Length headers.");
+	}
     } else {
-        volatile VALUE a = rb_ary_new();
-        rb_ary_push(a, v);
-        rb_ary_push(a, sval);
-        rb_hash_aset(hh, kval, a);
+	char		hkey[1024];
+	char		*k = hkey;
+	volatile VALUE	sval = rb_str_new(val, vlen);
+	volatile VALUE	kval;
+
+	strcpy(hkey, "HTTP_");
+	k = hkey + 5;
+	if ((int)(sizeof(hkey) - 5) <= klen) {
+	    klen = sizeof(hkey) - 6;
+	}
+	strncpy(k, key, klen);
+	hkey[klen + 5] = '\0';
+
+	//rb_hash_aset(hh, rb_str_new(hkey, klen + 5), sval);
+	// Contrary to the Rack spec, Rails expects all upper case keys so add those as well.
+	for (k = hkey + 5; '\0' != *k; k++) {
+	    if ('-' == *k) {
+		*k = '_';
+	    } else {
+		*k = toupper(*k);
+	    }
+	}
+	kval = rb_str_new(hkey, klen + 5);
+	if (Qnil == (v = rb_hash_lookup2(hh, kval, Qnil))) {
+	    rb_hash_aset(hh, kval, sval);
+	} else {
+	    volatile VALUE	a = rb_ary_new();
+
+	    rb_ary_push(a, v);
+	    rb_ary_push(a, sval);
+	    rb_hash_aset(hh, kval, a);
+	}
     }
 }
+
 static void
 fill_headers(agooReq r, VALUE hash) {
-    if (NULL == r || NULL == r->header.start || r->header.len <= 0) {
-        return;
+    char	*h = r->header.start;
+    char	*end = h + r->header.len + 1; // +1 for last \r
+    char	*key = h;
+    char	*kend = key;
+    char	*val = NULL;
+    char	*vend;
+    int		klen;
+    bool	upgrade = false;
+    bool	ws = false;
+
+    if (NULL == r) {
+	rb_raise(rb_eArgError, "Request is no longer valid.");
     }
 
-    char *h = r->header.start;
-    char *const end = h + r->header.len;  // Don't add +1 as in original
-    char *key = h;
-    char *kend = NULL;
-    char *val = NULL;
-    char *vend = NULL;
-    bool upgrade = false;
-    bool ws = false;
+    for (; h < end; h++) {
+	switch (*h) {
+	case ':':
+	    if (NULL == val) {
+		kend = h;
+		val = h + 1;
+	    }
+	    break;
+	case '\r':
+	    if (NULL != val) {
+		for (; ' ' == *val; val++) {
+		}
+		vend = h;
+	    }
+	    if (NULL != key) {
+		for (; ' ' == *key; key++) {
+		}
+	    }
+	    if ('\n' == *(h + 1)) {
+		h++;
+	    }
+	    klen = (int)(kend - key);
+	    add_header_value(hash, key, klen, val, (int)(vend - val));
+	    if (sizeof(upgrade_key) - 1 == klen && 0 == strncasecmp(key, upgrade_key, sizeof(upgrade_key) - 1)) {
+		if (sizeof(websocket_val) - 1 == vend - val &&
+		    0 == strncasecmp(val, websocket_val, sizeof(websocket_val) - 1)) {
+		    ws = true;
+		}
+	    } else if (sizeof(connection_key) - 1 == klen && 0 == strncasecmp(key, connection_key, sizeof(connection_key) - 1)) {
+		char	buf[1024];
 
-    // Process each byte with bounds checking
-    while (h < end) {
-        switch (*h) {
-        case ':':
-            if (NULL == val && h < end - 1) {  // Ensure room for value
-                kend = h;
-                val = h + 1;
-            }
-            break;
-
-        case '\r':
-            // Process a complete header line
-            if (NULL != val && key < kend && val < h) {
-                // Trim leading spaces from value with bounds check
-                while (val < h && ' ' == *val) {
-                    val++;
-                }
-                vend = h;
-
-                // Skip leading spaces in key with bounds check
-                while (key < kend && ' ' == *key) {
-                    key++;
-                }
-
-                // Only process if we have valid key and value
-                if (key < kend && val < vend) {
-                    int klen = (int)(kend - key);
-                    int vlen = (int)(vend - val);
-
-                    // Add header and check for special headers
-                    add_header_value(hash, key, klen, val, vlen);
-
-                    // Check for upgrade headers
-                    if (sizeof(upgrade_key) - 1 == klen && 
-                        0 == strncasecmp(key, upgrade_key, sizeof(upgrade_key) - 1)) {
-                        if (sizeof(websocket_val) - 1 == vlen &&
-                            0 == strncasecmp(val, websocket_val, sizeof(websocket_val) - 1)) {
-                            ws = true;
-                        }
-                    } else if (sizeof(connection_key) - 1 == klen && 
-                             0 == strncasecmp(key, connection_key, sizeof(connection_key) - 1)) {
-                        // Safe buffer for connection value check
-                        char buf[256];
-                        int copy_len = vlen < (int)sizeof(buf) - 1 ? vlen : (int)sizeof(buf) - 1;
-                        
-                        strncpy(buf, val, copy_len);
-                        buf[copy_len] = '\0';
-                        
-                        if (NULL != strstr(buf, upgrade_key)) {
-                            upgrade = true;
-                        }
-                    } else if (sizeof(accept_key) - 1 == klen && 
-                             0 == strncasecmp(key, accept_key, sizeof(accept_key) - 1)) {
-                        if (sizeof(event_stream_val) - 1 == vlen &&
-                            0 == strncasecmp(val, event_stream_val, sizeof(event_stream_val) - 1)) {
-                            r->upgrade = AGOO_UP_SSE;
-                        }
-                    }
-                }
-            }
-
-            // Handle CRLF
-            if (h < end - 1 && '\n' == *(h + 1)) {
-                h++;  // Skip the \n
-                if (h < end - 1) {  // More headers to come
-                    key = h + 1;
-                    kend = NULL;
-                    val = NULL;
-                    vend = NULL;
-                }
-            }
-            break;
-
-        default:
-            // Continue collecting header data
-            break;
-        }
-        h++;
+		strncpy(buf, val, vend - val);
+		buf[sizeof(buf)-1] = '\0';
+		if (NULL != strstr(buf, upgrade_key)) {
+		    upgrade = true;
+		}
+	    } else if (sizeof(accept_key) - 1 == klen && 0 == strncasecmp(key, accept_key, sizeof(accept_key) - 1)) {
+		if (sizeof(event_stream_val) - 1 == vend - val &&
+		    0 == strncasecmp(val, event_stream_val, sizeof(event_stream_val) - 1)) {
+		    r->upgrade = AGOO_UP_SSE;
+		}
+	    }
+	    key = h + 1;
+	    kend = NULL;
+	    val = NULL;
+	    vend = NULL;
+	    break;
+	default:
+	    break;
+	}
     }
-
-    // Set websocket upgrade if both conditions met
     if (upgrade && ws) {
-        r->upgrade = AGOO_UP_WS;
+	r->upgrade = AGOO_UP_WS;
     }
 }
-
 
 /* Document-method: headers
  *
